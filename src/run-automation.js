@@ -9,6 +9,7 @@ import 'dotenv/config';
 const CRAWLED_URLS_PATH = path.join(process.cwd(), 'data', 'crawled_urls.json');
 const IMAGES_PATH = path.join(process.cwd(), 'data', 'images.json');
 const TISTORY_BLOG_URL = 'https://reviewland.tistory.com'; // ⚠️ 본인의 티스토리 블로그 주소로 변경하세요.
+const AUTH_FILE_PATH = path.join(process.cwd(), 'auth.json');
 
 // --- 헬퍼 함수 ---
 
@@ -93,7 +94,6 @@ async function generateArticleWithGemini(sourceTitle, sourceText, imageUrls) {
     [원본 텍스트]:
     ${sourceText}
   `;
-
   const response = await genAI.models.generateContent({
     model: "gemini-2.5-flash",
     contents: [{ parts: [{ text: prompt }] }],
@@ -125,43 +125,26 @@ async function generateArticleWithGemini(sourceTitle, sourceText, imageUrls) {
   return { title, body: finalBody };
 }
 
+// 👇 수정됨: 저장된 인증 정보를 사용하도록 로직 변경
 async function postToTistory(article) {
   console.log('--- 4. 티스토리 포스팅 시작 ---');
   const browser = await chromium.launch();
-  const context = await browser.newContext();
+
+  // 저장된 인증 상태(auth.json)를 사용하여 컨텍스트 생성
+  const context = await browser.newContext({
+    storageState: AUTH_FILE_PATH,
+  });
   const page = await context.newPage();
 
   page.on('dialog', dialog => dialog.accept());
 
   try {
-    console.log('--- [Debug] Secrets 값 확인 시작 ---');
-    console.log(`- TISTORY_USERNAME: ${process.env.TISTORY_USERNAME}`);
-    if (process.env.TISTORY_PASSWORD) {
-      console.log(`- TISTORY_PASSWORD 존재 여부: true`);
-      console.log(`- TISTORY_PASSWORD 길이: ${process.env.TISTORY_PASSWORD.length}`);
-    } else {
-      console.log(`- TISTORY_PASSWORD 존재 여부: false`);
-    }
-    console.log('--- [Debug] Secrets 값 확인 종료 ---');
+    // 로그인 과정이 모두 불필요하므로 삭제하고 바로 글쓰기 페이지로 이동
+    console.log('✅ 저장된 인증 정보로 로그인 건너뛰기');
+    console.log('>> 새 글쓰기 페이지로 바로 이동합니다.');
+    await page.goto(`${TISTORY_BLOG_URL}/manage/newpost/`);
     
-    console.log(`>> 티스토리 관리 페이지로 이동합니다: ${TISTORY_BLOG_URL}/manage`);
-    await page.goto(`${TISTORY_BLOG_URL}/manage`);
-
-    console.log('>> 카카오계정으로 로그인 버튼 클릭');
-    await page.locator('#cMain a.btn_login.link_kakao_id').click();
-    
-    console.log('>> 카카오 계정으로 로그인을 시작합니다.');
-    await page.locator('input[name="loginId"]').fill(process.env.TISTORY_USERNAME);
-    await page.locator('input[name="password"]').fill(process.env.TISTORY_PASSWORD);
-    await page.locator('.btn_g.highlight.submit').click();
-
-    await page.waitForURL('https://*.tistory.com/manage', { timeout: 60000 });
-    console.log('✅ 로그인 성공!');
-    await page.waitForTimeout(1000);
-
-    console.log('>> 글쓰기 버튼 클릭');
-    await page.locator('a.btn_tistory.btn_log_info[href="/manage/post"]').click();
-    
+    // 이하 글쓰기 및 발행 로직은 이전과 동일
     console.log('>> 카테고리 드롭다운 클릭');
     await page.locator('#editorContainer div.btn-category button').click();
     await page.waitForTimeout(1000);
@@ -211,18 +194,11 @@ async function postToTistory(article) {
     
     console.log('🎉 포스팅이 성공적으로 완료되었습니다!');
     return true;
+
   } catch (error) {
     console.error('!! 티스토리 포스팅 중 오류 발생:', error);
-    
-    console.log('📸 디버깅 정보 수집중...');
     await page.screenshot({ path: 'error_screenshot.png', fullPage: true });
-    
-    const errorPageHtml = await page.content();
-    await fs.writeFile('error_page.html', errorPageHtml, 'utf-8');
-
-    console.log(`📸 오류 발생 당시 URL: ${page.url()}`);
-    console.log('📸 디버깅을 위해 error_screenshot.png와 error_page.html 파일을 저장했습니다. 깃헙 액션의 "Artifacts"에서 확인하세요.');
-    
+    console.log('📸 디버깅을 위해 error_screenshot.png 파일을 저장했습니다.');
     return false;
   } finally {
     await browser.close();
@@ -231,10 +207,13 @@ async function postToTistory(article) {
 
 // --- 메인 실행 함수 ---
 async function main() {
-  if (!process.env.GEMINI_API_KEY || !process.env.TISTORY_USERNAME || !process.env.TISTORY_PASSWORD) {
-    console.error('!! .env 파일에 환경 변수(GEMINI_API_KEY, TISTORY_USERNAME, TISTORY_PASSWORD)가 올바르게 설정되었는지 확인하세요.');
+  if (!process.env.GEMINI_API_KEY) {
+    console.error('!! .env 파일 또는 Secrets에 GEMINI_API_KEY가 설정되었는지 확인하세요.');
     return;
   }
+  
+  // 깃헙 액션 환경에서는 워크플로우가 auth.json을 생성해주므로, 로컬 테스트 시에만 파일 존재 여부를 확인하는 것이 좋습니다.
+  // 이 스크립트는 깃헙 액션에서 실행되는 것을 전제로 하므로, 해당 파일 존재 여부 체크는 생략합니다.
 
   const browser = await chromium.launch();
   const page = await browser.newPage();
