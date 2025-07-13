@@ -4,7 +4,7 @@ name: Daily Blog Post Automation
 
 on:
   schedule:
-    - cron: '0 5 * * *'
+    - cron: '0 5 * * *' # 한국 시간 오후 2시
   workflow_dispatch:
 
 jobs:
@@ -23,6 +23,10 @@ jobs:
         with:
           node-version: '20'
 
+      # 👇 추가됨: Secret 값을 auth.json 파일로 생성하는 단계
+      - name: Create auth.json from secret
+        run: echo "${{ secrets.TISTORY_AUTH_JSON }}" > auth.json
+        
       - name: Install dependencies
         run: npm ci
 
@@ -31,24 +35,12 @@ jobs:
 
       - name: Run Automation Script
         run: node src/run-automation.js
+        # 👇 수정됨: 아이디/비번 대신 API 키만 전달
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          TISTORY_USERNAME: ${{ secrets.TISTORY_USERNAME }}
-          TISTORY_PASSWORD: ${{ secrets.TISTORY_PASSWORD }}
 
       - name: Auto commit changes
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "chore: Update crawled URLs list"
           file_pattern: data/*.json
-
-      # 👇 추가됨: 작업 실패 시, 디버깅 파일들을 "Artifacts"로 업로드
-      - name: Upload error artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: error-artifacts
-          path: |
-            error_screenshot.png
-            error_page.html
-          retention-days: 7
