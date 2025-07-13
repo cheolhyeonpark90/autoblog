@@ -23,9 +23,11 @@ jobs:
         with:
           node-version: '20'
 
-      # 👇 추가됨: Secret 값을 auth.json 파일로 생성하는 단계
+      # 👇 수정됨: Secret을 환경 변수로 전달하여 파일 생성
       - name: Create auth.json from secret
-        run: echo "${{ secrets.TISTORY_AUTH_JSON }}" > auth.json
+        run: echo "$TISTORY_AUTH_SECRET" > auth.json
+        env:
+          TISTORY_AUTH_SECRET: ${{ secrets.TISTORY_AUTH_JSON }}
         
       - name: Install dependencies
         run: npm ci
@@ -35,7 +37,6 @@ jobs:
 
       - name: Run Automation Script
         run: node src/run-automation.js
-        # 👇 수정됨: 아이디/비번 대신 API 키만 전달
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
@@ -44,3 +45,13 @@ jobs:
         with:
           commit_message: "chore: Update crawled URLs list"
           file_pattern: data/*.json
+
+      - name: Upload error artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: error-artifacts
+          path: |
+            error_screenshot.png
+            error_page.html
+          retention-days: 7
