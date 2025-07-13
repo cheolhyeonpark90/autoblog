@@ -10,21 +10,26 @@ const CRAWLED_URLS_PATH = path.join(process.cwd(), 'data', 'crawled_urls.json');
 const IMAGES_PATH = path.join(process.cwd(), 'data', 'images.json');
 const TISTORY_BLOG_URL = 'https://reviewland.tistory.com'; // ⚠️ 본인의 티스토리 블로그 주소로 변경하세요.
 
-// --- 헬퍼 함수 (이전과 동일) ---
+// --- 헬퍼 함수 ---
+
 async function getCrawledUrls() {
   try {
     const data = await fs.readFile(CRAWLED_URLS_PATH, 'utf8');
-    if (!data || data.trim() === '') { return []; }
+    if (!data || data.trim() === '') {
+      return [];
+    }
     return JSON.parse(data);
   } catch (error) {
     if (error.code === 'ENOENT') return [];
     throw error;
   }
 }
+
 async function addCrawledUrl(url, list) {
   list.push(url);
   await fs.writeFile(CRAWLED_URLS_PATH, JSON.stringify(list, null, 2), 'utf8');
 }
+
 async function selectRandomImages() {
   console.log('--- 2. 이미지 선택 시작 ---');
   const data = await fs.readFile(IMAGES_PATH, 'utf8');
@@ -34,21 +39,27 @@ async function selectRandomImages() {
   console.log('✅ 선택된 이미지 URL:', selectedImages);
   return selectedImages;
 }
+
 async function crawlHealthlineArticle(page, crawledUrls) {
   console.log('--- 1. 콘텐츠 수집 시작 ---');
   console.log('>> Health News 페이지로 이동합니다:', 'https://www.healthline.com/health-news');
   await page.goto('https://www.healthline.com/health-news', { waitUntil: 'domcontentloaded' });
+
   console.log('>> 페이지에서 기사 링크를 수집합니다...');
   const articleLinks = await page.locator('a.css-a63gyd').all();
   console.log(`>> 발견된 기사 링크 ${articleLinks.length}개`);
+
   for (const link of articleLinks) {
     const href = await link.getAttribute('href');
     const fullUrl = new URL(href, 'https://www.healthline.com').toString();
+
     if (!crawledUrls.includes(fullUrl)) {
       console.log(`✅ 새로운 기사를 발견했습니다: ${fullUrl}`);
       await page.goto(fullUrl, { waitUntil: 'domcontentloaded' });
+
       const articleTitle = await page.locator('h1.css-1q7njkh').textContent();
       const articleBody = await page.locator('article.article-body').textContent();
+
       if (articleBody && articleBody.length > 500) {
         console.log(`>> 기사 크롤링 성공 (제목 글자 수: ${articleTitle.length}, 본문 글자 수: ${articleBody.length})`);
         return { url: fullUrl, title: articleTitle.trim(), text: articleBody.trim() };
@@ -57,6 +68,7 @@ async function crawlHealthlineArticle(page, crawledUrls) {
   }
   return null;
 }
+
 async function generateArticleWithGemini(sourceTitle, sourceText, imageUrls) {
   console.log('--- 3. AI 콘텐츠 생성 시작 ---');
   console.log('>> Gemini API에 기사 생성을 요청합니다... (gemini-2.5-flash 모델 사용)');
@@ -64,6 +76,7 @@ async function generateArticleWithGemini(sourceTitle, sourceText, imageUrls) {
   const prompt = `
     당신은 건강 및 웰니스 전문 작가입니다.
     아래에 제공된 원본 기사의 제목과 본문을 참조하여, 독자들이 흥미롭게 읽을 수 있는 새로운 블로그 기사를 작성해주세요.
+    
     **엄격한 규칙:**
     1. **언어:** 반드시 한국어로 작성해야 합니다.
     2. **독자 대상:** 전문 용어를 최대한 피하고, 한국인 일반 대중이 쉽게 이해할 수 있는 친근한 어조로 작성해야 합니다.
@@ -80,26 +93,38 @@ async function generateArticleWithGemini(sourceTitle, sourceText, imageUrls) {
     [원본 텍스트]:
     ${sourceText}
   `;
+
   const response = await genAI.models.generateContent({
     model: "gemini-2.5-flash",
     contents: [{ parts: [{ text: prompt }] }],
-    config: { thinkingConfig: { thinkingBudget: 0 } }
+    config: {
+      thinkingConfig: {
+        thinkingBudget: 0,
+      }
+    }
   });
+
   const responseText = response.text;
+  
   const parts = responseText.split('|||TITLE-BODY-SEPARATOR|||');
-  if (parts.length < 2) { throw new Error('AI 응답이 제목과 본문 구분자 "---"를 포함하지 않습니다.'); }
+  if (parts.length < 2) {
+    throw new Error('AI 응답이 제목과 본문 구분자 "|||TITLE-BODY-SEPARATOR|||"를 포함하지 않습니다.');
+  }
   const title = parts[0].trim();
   const body = parts.slice(1).join('|||TITLE-BODY-SEPARATOR|||').trim();
-  if (!title || !body) { throw new Error('AI 응답에서 제목 또는 본문을 추출할 수 없습니다.'); }
+  if (!title || !body) {
+    throw new Error('AI 응답에서 제목 또는 본문을 추출할 수 없습니다.');
+  }
+
   const disclaimer = `
 ---
 > **면책 조항 (Disclaimer):** 이 글은 정보 제공을 목적으로 하며, 전문적인 의학적 조언이나 진단을 대체할 수 없습니다. 건강 관련 문제에 대해서는 반드시 전문 의료인과 상담하시기 바랍니다.`;
   const finalBody = body + disclaimer;
+
   console.log('✅ AI 기사 생성 완료');
   return { title, body: finalBody };
 }
 
-// 👇 수정됨: 마지막 대기 방식을 waitForTimeout으로 변경
 async function postToTistory(article) {
   console.log('--- 4. 티스토리 포스팅 시작 ---');
   const browser = await chromium.launch();
@@ -109,6 +134,16 @@ async function postToTistory(article) {
   page.on('dialog', dialog => dialog.accept());
 
   try {
+    console.log('--- [Debug] Secrets 값 확인 시작 ---');
+    console.log(`- TISTORY_USERNAME: ${process.env.TISTORY_USERNAME}`);
+    if (process.env.TISTORY_PASSWORD) {
+      console.log(`- TISTORY_PASSWORD 존재 여부: true`);
+      console.log(`- TISTORY_PASSWORD 길이: ${process.env.TISTORY_PASSWORD.length}`);
+    } else {
+      console.log(`- TISTORY_PASSWORD 존재 여부: false`);
+    }
+    console.log('--- [Debug] Secrets 값 확인 종료 ---');
+    
     console.log(`>> 티스토리 관리 페이지로 이동합니다: ${TISTORY_BLOG_URL}/manage`);
     await page.goto(`${TISTORY_BLOG_URL}/manage`);
 
@@ -171,7 +206,6 @@ async function postToTistory(article) {
     console.log('>> 최종 "공개 발행" 버튼 클릭');
     await page.locator('#publish-btn').click();
     
-    // 👇 수정됨: URL 확인 대신 5초 대기
     console.log('>> 발행 완료 후 5초 대기...');
     await page.waitForTimeout(5000);
     
@@ -179,32 +213,44 @@ async function postToTistory(article) {
     return true;
   } catch (error) {
     console.error('!! 티스토리 포스팅 중 오류 발생:', error);
+    
+    console.log('📸 디버깅 정보 수집중...');
     await page.screenshot({ path: 'error_screenshot.png', fullPage: true });
-    console.log('📸 디버깅을 위해 error_screenshot.png 파일을 저장했습니다.');
+    
+    const errorPageHtml = await page.content();
+    await fs.writeFile('error_page.html', errorPageHtml, 'utf-8');
+
+    console.log(`📸 오류 발생 당시 URL: ${page.url()}`);
+    console.log('📸 디버깅을 위해 error_screenshot.png와 error_page.html 파일을 저장했습니다. 깃헙 액션의 "Artifacts"에서 확인하세요.');
+    
     return false;
   } finally {
     await browser.close();
   }
 }
 
-// --- 메인 실행 함수 (이전과 동일) ---
+// --- 메인 실행 함수 ---
 async function main() {
   if (!process.env.GEMINI_API_KEY || !process.env.TISTORY_USERNAME || !process.env.TISTORY_PASSWORD) {
     console.error('!! .env 파일에 환경 변수(GEMINI_API_KEY, TISTORY_USERNAME, TISTORY_PASSWORD)가 올바르게 설정되었는지 확인하세요.');
     return;
   }
+
   const browser = await chromium.launch();
   const page = await browser.newPage();
   try {
     const crawledUrls = await getCrawledUrls();
     const sourceArticle = await crawlHealthlineArticle(page, crawledUrls);
+
     if (!sourceArticle) {
       console.log('>> 새로운 기사를 찾지 못해 작업을 종료합니다.');
       return;
     }
+    
     const imageUrls = await selectRandomImages();
     const newArticle = await generateArticleWithGemini(sourceArticle.title, sourceArticle.text, imageUrls);
     const isSuccess = await postToTistory(newArticle);
+
     if (isSuccess) {
       await addCrawledUrl(sourceArticle.url, crawledUrls);
       console.log('✅ 성공! 크롤링 URL 목록을 업데이트했습니다.');
