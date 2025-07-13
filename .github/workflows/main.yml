@@ -1,0 +1,50 @@
+# .github/workflows/main.yml
+
+name: Daily Blog Post Automation
+
+on:
+  schedule:
+    # 한국 시간(KST) 매일 오후 2시에 실행
+    - cron: '0 5 * * *'
+  
+  workflow_dispatch:
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # 👇 수정됨: 워크플로우에 저장소 쓰기 권한 부여
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps
+
+      - name: Run Automation Script
+        run: node src/run-automation.js
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TISTORY_USERNAME: ${{ secrets.TISTORY_USERNAME }}
+          TISTORY_PASSWORD: ${{ secrets.TISTORY_PASSWORD }}
+
+      # 👇 추가됨: 변경된 crawled_urls.json 파일을 자동으로 커밋 및 푸시하는 단계
+      - name: Auto commit changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          # 커밋 메시지를 지정합니다.
+          commit_message: "chore: Update crawled URLs list"
+          # 커밋할 파일 패턴을 지정합니다. (data 폴더의 모든 json 파일)
+          file_pattern: data/*.json
