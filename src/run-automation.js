@@ -9,7 +9,6 @@ import 'dotenv/config';
 const CRAWLED_URLS_PATH = path.join(process.cwd(), 'data', 'crawled_urls.json');
 const IMAGES_PATH = path.join(process.cwd(), 'data', 'images.json');
 const TISTORY_BLOG_URL = 'https://reviewland.tistory.com'; // ⚠️ 본인의 티스토리 블로그 주소로 변경하세요.
-const AUTH_FILE_PATH = path.join(process.cwd(), 'auth.json');
 
 // --- 헬퍼 함수 ---
 
@@ -94,6 +93,7 @@ async function generateArticleWithGemini(sourceTitle, sourceText, imageUrls) {
     [원본 텍스트]:
     ${sourceText}
   `;
+
   const response = await genAI.models.generateContent({
     model: "gemini-2.5-flash",
     contents: [{ parts: [{ text: prompt }] }],
@@ -125,43 +125,54 @@ async function generateArticleWithGemini(sourceTitle, sourceText, imageUrls) {
   return { title, body: finalBody };
 }
 
-// 👇 수정됨: 저장된 인증 정보를 사용하도록 로직 변경
 async function postToTistory(article) {
   console.log('--- 4. 티스토리 포스팅 시작 ---');
   const browser = await chromium.launch();
 
-  // 저장된 인증 상태(auth.json)를 사용하여 컨텍스트 생성
+  // 👇 수정됨: 브라우저 컨텍스트에 User Agent와 Viewport 추가
   const context = await browser.newContext({
-    storageState: AUTH_FILE_PATH,
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+    viewport: { width: 1920, height: 1080 },
   });
   const page = await context.newPage();
 
   page.on('dialog', dialog => dialog.accept());
 
   try {
-    // 로그인 과정이 모두 불필요하므로 삭제하고 바로 글쓰기 페이지로 이동
-    console.log('✅ 저장된 인증 정보로 로그인 건너뛰기');
-    console.log('>> 새 글쓰기 페이지로 바로 이동합니다.');
-    await page.goto(`${TISTORY_BLOG_URL}/manage/newpost/`);
+    console.log(`>> 티스토리 관리 페이지로 이동합니다: ${TISTORY_BLOG_URL}/manage`);
+    await page.goto(`${TISTORY_BLOG_URL}/manage`);
     
-    // 이하 글쓰기 및 발행 로직은 이전과 동일
-    console.log('>> 카테고리 드롭다운 클릭');
-    await page.locator('#editorContainer div.btn-category button').click();
-    await page.waitForTimeout(1000);
+    console.log('>> 카카오계정으로 로그인 버튼 클릭');
+    await page.locator('#cMain a.btn_login.link_kakao_id').click();
     
-    console.log('>> "건강" 카테고리 선택');
-    await page.locator('#category-item-998705').click();
-    await page.waitForTimeout(1000);
-    
-    console.log('>> 기본모드 버튼 클릭');
-    await page.locator('#editor-mode-layer-btn-open').click();
-    await page.waitForTimeout(1000);
-    
-    console.log('>> "마크다운" 모드 선택 (팝업은 자동으로 확인됩니다)');
-    await page.locator('#editor-mode-markdown-text').click();
+    console.log('>> 카카오 계정으로 로그인을 시작합니다.');
+    await page.locator('input[name="loginId"]').fill(process.env.TISTORY_USERNAME);
+    await page.locator('input[name="password"]').fill(process.env.TISTORY_PASSWORD);
+    await page.locator('.btn_g.highlight.submit').click();
 
-    console.log('>> 마크다운 에디터 로딩을 3초간 기다립니다...');
-    await page.waitForTimeout(3000);
+    await page.waitForURL('https://*.tistory.com/manage', { timeout: 60000 });
+    console.log('✅ 로그인 성공!');
+    await page.waitForTimeout(1000);
+
+    console.log('>> 글쓰기 버튼 클릭');
+    await page.locator('a.btn_tistory.btn_log_info[href="/manage/post"]').click();
+    
+    console.log('>> 에디터 상태를 확인합니다...');
+    const isMarkdownMode = await page.locator('.CodeMirror').isVisible();
+
+    if (isMarkdownMode) {
+      console.log('>> 이미 마크다운 모드로 로딩되었습니다.');
+    } else {
+      console.log('>> 기본 모드입니다. 카테고리 및 마크다운 전환을 시작합니다.');
+      await page.locator('#editorContainer div.btn-category button').click();
+      await page.waitForTimeout(1000);
+      await page.locator('#category-item-998705').click();
+      await page.waitForTimeout(1000);
+      await page.locator('#editor-mode-layer-btn-open').click();
+      await page.waitForTimeout(1000);
+      await page.locator('#editor-mode-markdown-text').click();
+      await page.waitForTimeout(3000);
+    }
     
     console.log('>> 제목을 입력합니다:', article.title);
     await page.locator('#post-title-inp').fill(article.title);
@@ -198,7 +209,6 @@ async function postToTistory(article) {
   } catch (error) {
     console.error('!! 티스토리 포스팅 중 오류 발생:', error);
     await page.screenshot({ path: 'error_screenshot.png', fullPage: true });
-    console.log('📸 디버깅을 위해 error_screenshot.png 파일을 저장했습니다.');
     return false;
   } finally {
     await browser.close();
@@ -207,16 +217,19 @@ async function postToTistory(article) {
 
 // --- 메인 실행 함수 ---
 async function main() {
-  if (!process.env.GEMINI_API_KEY) {
-    console.error('!! .env 파일 또는 Secrets에 GEMINI_API_KEY가 설정되었는지 확인하세요.');
+  if (!process.env.GEMINI_API_KEY || !process.env.TISTORY_USERNAME || !process.env.TISTORY_PASSWORD) {
+    console.error('!! .env 또는 Secrets에 환경 변수가 올바르게 설정되었는지 확인하세요.');
     return;
   }
-  
-  // 깃헙 액션 환경에서는 워크플로우가 auth.json을 생성해주므로, 로컬 테스트 시에만 파일 존재 여부를 확인하는 것이 좋습니다.
-  // 이 스크립트는 깃헙 액션에서 실행되는 것을 전제로 하므로, 해당 파일 존재 여부 체크는 생략합니다.
 
   const browser = await chromium.launch();
-  const page = await browser.newPage();
+  // 👇 수정됨: 크롤링용 컨텍스트에도 동일한 환경 적용
+  const context = await browser.newContext({
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+    viewport: { width: 1920, height: 1080 },
+  });
+  const page = await context.newPage();
+
   try {
     const crawledUrls = await getCrawledUrls();
     const sourceArticle = await crawlHealthlineArticle(page, crawledUrls);
